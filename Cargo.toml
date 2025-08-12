@@ -1,0 +1,7 @@
+[workspace]
+resolver = "3"
+members = [
+    "server",
+    "platforms/common",
+    "platforms/wxwork_group_bot"
+]
