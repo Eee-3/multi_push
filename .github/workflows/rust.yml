@@ -1,0 +1,119 @@
+name: Rust CI/CD
+
+on:
+  push:
+    branches: ["*"]  # 监听所有分支
+  pull_request:
+    branches: ["*"]  # 监听所有分支的 PR
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: server  # 替换为你的二进制文件名（不含扩展名）
+  PROJECT_NAME: Multi-Push  # 项目显示名称
+
+jobs:
+  build_and_release:
+    runs-on: windows-latest
+    permissions:
+      contents: write  # 允许创建/更新 Release
+
+    steps:
+      - name: 🧾 Checkout代码
+        uses: actions/checkout@v4
+
+      - name: 🔧 安装Rust工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 🛠️ 构建Debug版本
+        run: cargo build --verbose
+
+      - name: 🛠️ 构建Release版本
+        run: cargo build --release --verbose
+
+      - name: 🗓️ 生成日期戳 & 分支处理
+        shell: pwsh
+        run: |
+          # 获取原始分支名并替换非法字符
+          $branch = "$env:GITHUB_REF_NAME"
+          $safeBranch = $branch -replace '[\\/]', '_'
+          
+          # 生成时间戳
+          Set-TimeZone "China Standard Time"
+          $date = Get-Date -Format "yyyyMMdd-HHmmss"
+          $sha = "$env:GITHUB_SHA".Substring(0,7)
+          
+          # 写入环境变量
+          echo "BUILD_DATE=$date" >> $env:GITHUB_ENV
+          echo "GIT_SHA=$sha" >> $env:GITHUB_ENV
+          echo "BRANCH_NAME=$safeBranch" >> $env:GITHUB_ENV
+
+      - name: 📁 重命名并整理构建产物
+        shell: pwsh
+        run: |
+          # 确保 dist 目录存在
+          $distDir = "dist"
+          New-Item -ItemType Directory -Path $distDir -Force
+          
+          $targetDir = "target"
+          $debugDir = Join-Path $targetDir "debug"
+          $releaseDir = Join-Path $targetDir "release"
+
+          # 构建产物路径（使用 Join-Path 避免路径拼接错误）
+          $debugSrc = Join-Path $debugDir "${env:BINARY_NAME}.exe"
+          $releaseSrc = Join-Path $releaseDir "${env:BINARY_NAME}.exe"
+
+          # 文件名格式：branch-YYYYMMDD-SHA-type.exe
+          $debugName = "${env:BRANCH_NAME}-${env:BUILD_DATE}-${env:GIT_SHA}-debug.exe"
+          $releaseName = "${env:BRANCH_NAME}-${env:BUILD_DATE}-${env:GIT_SHA}-release.exe"
+
+          # 检查文件是否存在
+          if (-Not (Test-Path $debugSrc)) {
+            Write-Error "Debug binary not found at $debugSrc"
+            exit 1
+          }
+          if (-Not (Test-Path $releaseSrc)) {
+            Write-Error "Release binary not found at $releaseSrc"
+            exit 1
+          }
+
+          # 重命名并移动文件
+          Rename-Item -Path $debugSrc -NewName $debugName
+          Rename-Item -Path $releaseSrc -NewName $releaseName
+
+          Move-Item -Path $debugDir\$debugName -Destination $distDir
+          Move-Item -Path $releaseDir\$releaseName -Destination $distDir
+
+          # 写入环境变量
+          echo "DEBUG_FILENAME=$debugName" >> $env:GITHUB_ENV
+          echo "RELEASE_FILENAME=$releaseName" >> $env:GITHUB_ENV
+
+#      - name: 📁 上传构建产物到Artifacts
+#        uses: actions/upload-artifact@v4
+#        with:
+#          name: builds-${{ env.BRANCH_NAME }}-${{ env.BUILD_DATE }}-${{ env.GIT_SHA }}
+#          path: dist/
+
+      - name: 🪄 创建或更新预发布版本
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # 每个分支使用独立 tag，如 auto-build-feature_test
+          tag_name: auto-build-${{ env.BRANCH_NAME }}
+          name: 🚀 ${{ env.PROJECT_NAME }} Auto-Build (${{ env.BRANCH_NAME }})
+          body: |
+            📦 自动构建版本 - ${{ github.sha }}
+            
+            📅 构建时间：${{ env.BUILD_DATE }} UTC+8
+            
+            🌿 分支：${{ github.ref_name }}
+            
+            🔗 下载最新构建产物：
+            - [Debug 版本](https://github.com/${{ github.repository }}/releases/download/auto-build-${{ env.BRANCH_NAME }}/${{ env.DEBUG_FILENAME }})
+            - [Release 版本](https://github.com/${{ github.repository }}/releases/download/auto-build-${{ env.BRANCH_NAME }}/${{ env.RELEASE_FILENAME }})
+            
+            📄 完整构建日志：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          prerelease: true
+          files: |
+            dist/${{ env.DEBUG_FILENAME }}
+            dist/${{ env.RELEASE_FILENAME }}
