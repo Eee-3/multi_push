@@ -80,7 +80,7 @@ async fn main() -> std::io::Result<()> {
             .service(hello)
             .service(push)
     })
-    .bind("127.0.0.1:8888")?
+    .bind("0.0.0.0:8888")?
     .run()
     .await
 }
